@@ -2109,6 +2109,20 @@ public final class Table implements AutoCloseable {
    * Concatenate multiple tables together to form a single table.
    * The schema of each table (i.e.: number of columns and types of each column) must be equal
    * across all tables and will determine the schema of the resulting table.
+   *
+   * Example:
+   * <pre>{@code
+   * // t0:
+   * //   col0 = [1, 2],        DType = INT32
+   * //   col1 = ["a", "b"],    DType = STRING
+   * // t1:
+   * //   col0 = [3],           DType = INT32
+   * //   col1 = ["c"],         DType = STRING
+   * Table result = Table.concatenate(t0, t1);
+   * // result:
+   * //   col0 = [1, 2, 3],       DType = INT32
+   * //   col1 = ["a", "b", "c"], DType = STRING
+   * }</pre>
    */
   public static Table concatenate(Table... tables) {
     if (tables.length < 2) {
@@ -2127,10 +2141,13 @@ public final class Table implements AutoCloseable {
    * Interleave all columns into a single column. Columns must all have the same data type and length.
    *
    * Example:
-   * ```
-   * input  = [[A1, A2, A3], [B1, B2, B3]]
-   * return = [A1, B1, A2, B2, A3, B3]
-   * ```
+   * <pre>{@code
+   * // table:
+   * //   col0 = ["A1", "A2", "A3"], DType = STRING
+   * //   col1 = ["B1", "B2", "B3"], DType = STRING
+   * ColumnVector result = table.interleaveColumns();
+   * // result = ["A1", "B1", "A2", "B2", "A3", "B3"], DType = STRING
+   * }</pre>
    *
    * @return The interleaved columns as a single column
    */
@@ -2141,6 +2158,18 @@ public final class Table implements AutoCloseable {
 
   /**
    * Repeat each row of this table count times.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = [1, 2],               DType = INT32
+   * //   col1 = ["a", "b"],           DType = STRING
+   * Table result = table.repeat(2);
+   * // result:
+   * //   col0 = [1, 1, 2, 2],         DType = INT32
+   * //   col1 = ["a", "a", "b", "b"], DType = STRING
+   * }</pre>
+   *
    * @param count the number of times to repeat each row.
    * @return the new Table.
    */
@@ -2151,6 +2180,19 @@ public final class Table implements AutoCloseable {
   /**
    * Create a new table by repeating each row of this table. The number of
    * repetitions of each row is defined by the corresponding value in counts.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0   = [1, 2, 3],   DType = INT32
+   * //   col1   = [4, 5, 6],   DType = INT32
+   * // counts   = [1, 0, 2],   DType = INT32
+   * Table result = table.repeat(counts);
+   * // result:
+   * //   col0 = [1, 3, 3],     DType = INT32
+   * //   col1 = [4, 6, 6],     DType = INT32
+   * }</pre>
+   *
    * @param counts the number of times to repeat each row. Cannot have nulls, must be an
    *               Integer type, and must have one entry for each row in the table.
    * @return the new Table.
@@ -2164,6 +2206,18 @@ public final class Table implements AutoCloseable {
    * Partition this table using the mapping in partitionMap. partitionMap must be an integer
    * column. The number of rows in partitionMap must be the same as this table.  Each row
    * in the map will indicate which partition the rows in the table belong to.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0         = [10, 20, 30, 40], DType = INT32
+   * // partitionMap   = [0, 1, 0, 1],     DType = INT32
+   * PartitionedTable result = table.partition(partitionMap, 2);
+   * // result.getPartitions() = [0, 2, 4]
+   * // result.getTable():
+   * //   col0         = [10, 30, 20, 40], DType = INT32
+   * }</pre>
+   *
    * @param partitionMap the partitions for each row.
    * @param numberOfPartitions number of partitions
    * @return {@link PartitionedTable} Table that exposes a limited functionality of the
@@ -2180,25 +2234,19 @@ public final class Table implements AutoCloseable {
 
   /**
    * Find smallest indices in a sorted table where values should be inserted to maintain order.
-   * <pre>
+   *
    * Example:
+   * <pre>{@code
+   * // inputTable:
+   * //   col0 = [10, 20, 20, 30, 50], DType = INT32
+   * // valuesTable:
+   * //   col0 = [20],                 DType = INT32
+   * // areNullsSmallest = [true]
+   * // descFlags        = [false]
+   * ColumnVector result = inputTable.lowerBound(areNullsSmallest, valuesTable, descFlags);
+   * // result = [1],                  DType = INT32
+   * }</pre>
    *
-   *  Single column:
-   *      idx            0   1   2   3   4
-   *   inputTable  =   { 10, 20, 20, 30, 50 }
-   *   valuesTable =   { 20 }
-   *   result      =   { 1 }
-   *
-   *  Multi Column:
-   *      idx                0    1    2    3    4
-   *   inputTable      = {{  10,  20,  20,  20,  20 },
-   *                      { 5.0,  .5,  .5,  .7,  .7 },
-   *                      {  90,  77,  78,  61,  61 }}
-   *   valuesTable     = {{ 20 },
-   *                      { .7 },
-   *                      { 61 }}
-   *   result          = {  3 }
-   * </pre>
    * The input table and the values table need to be non-empty (row count > 0)
    * @param areNullsSmallest per column, true if nulls are assumed smallest
    * @param valueTable the table of values to find insertion locations for
@@ -2216,6 +2264,17 @@ public final class Table implements AutoCloseable {
    * Find smallest indices in a sorted table where values should be inserted to maintain order.
    * This is a convenience method. It pulls out the columns indicated by the args and sets up the
    * ordering properly to call `lowerBound`.
+   *
+   * Example:
+   * <pre>{@code
+   * // inputTable:
+   * //   col0 = [10, 20, 20, 30, 50], DType = INT32
+   * // valuesTable:
+   * //   col0 = [20],                 DType = INT32
+   * ColumnVector result = inputTable.lowerBound(valuesTable, OrderByArg.asc(0));
+   * // result = [1],                  DType = INT32
+   * }</pre>
+   *
    * @param valueTable the table of values to find insertion locations for
    * @param args the sort order used to sort this table.
    * @return ColumnVector with lower bound indices for all rows in valueTable
@@ -2240,25 +2299,19 @@ public final class Table implements AutoCloseable {
   /**
    * Find largest indices in a sorted table where values should be inserted to maintain order.
    * Given a sorted table return the upper bound.
-   * <pre>
+   *
    * Example:
+   * <pre>{@code
+   * // inputTable:
+   * //   col0 = [10, 20, 20, 30, 50], DType = INT32
+   * // valuesTable:
+   * //   col0 = [20],                 DType = INT32
+   * // areNullsSmallest = [true]
+   * // descFlags        = [false]
+   * ColumnVector result = inputTable.upperBound(areNullsSmallest, valuesTable, descFlags);
+   * // result = [3],                  DType = INT32
+   * }</pre>
    *
-   *  Single column:
-   *      idx            0   1   2   3   4
-   *   inputTable  =   { 10, 20, 20, 30, 50 }
-   *   valuesTable =   { 20 }
-   *   result      =   { 3 }
-   *
-   *  Multi Column:
-   *      idx                0    1    2    3    4
-   *   inputTable      = {{  10,  20,  20,  20,  20 },
-   *                      { 5.0,  .5,  .5,  .7,  .7 },
-   *                      {  90,  77,  78,  61,  61 }}
-   *   valuesTable     = {{ 20 },
-   *                      { .7 },
-   *                      { 61 }}
-   *   result          = {  5 }
-   * </pre>
    * The input table and the values table need to be non-empty (row count > 0)
    * @param areNullsSmallest per column, true if nulls are assumed smallest
    * @param valueTable the table of values to find insertion locations for
@@ -2276,6 +2329,17 @@ public final class Table implements AutoCloseable {
    * Find largest indices in a sorted table where values should be inserted to maintain order.
    * This is a convenience method. It pulls out the columns indicated by the args and sets up the
    * ordering properly to call `upperBound`.
+   *
+   * Example:
+   * <pre>{@code
+   * // inputTable:
+   * //   col0 = [10, 20, 20, 30, 50], DType = INT32
+   * // valuesTable:
+   * //   col0 = [20],                 DType = INT32
+   * ColumnVector result = inputTable.upperBound(valuesTable, OrderByArg.asc(0));
+   * // result = [3],                  DType = INT32
+   * }</pre>
+   *
    * @param valueTable the table of values to find insertion locations for
    * @param args the sort order used to sort this table.
    * @return ColumnVector with upper bound indices for all rows in valueTable
@@ -2309,6 +2373,19 @@ public final class Table implements AutoCloseable {
   /**
    * Joins two tables all of the left against all of the right. Be careful as this
    * gets very big and you can easily use up all of the GPUs memory.
+   *
+   * Example:
+   * <pre>{@code
+   * // left:
+   * //   col0 = [1, 2],            DType = INT32
+   * // right:
+   * //   col0 = ["a", "b"],        DType = STRING
+   * Table result = left.crossJoin(right);
+   * // result:
+   * //   col0 = [1, 1, 2, 2],             DType = INT32
+   * //   col1 = ["a", "b", "a", "b"],     DType = STRING
+   * }</pre>
+   *
    * @param right the right table
    * @return the joined table.  The order of the columns returned will be left columns,
    * right columns.
