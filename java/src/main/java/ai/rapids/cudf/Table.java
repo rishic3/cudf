@@ -2109,6 +2109,23 @@ public final class Table implements AutoCloseable {
    * Concatenate multiple tables together to form a single table.
    * The schema of each table (i.e.: number of columns and types of each column) must be equal
    * across all tables and will determine the schema of the resulting table.
+   *
+   * Example:
+   * <pre>{@code
+   * // t1:
+   * //   col0 = [1, 2, 3],       DType = INT32
+   * //   col1 = ["a", "b", "c"], DType = STRING
+   * // t2:
+   * //   col0 = [4, 5],          DType = INT32
+   * //   col1 = ["d", "e"],      DType = STRING
+   * Table result = Table.concatenate(t1, t2);
+   * // result:
+   * //   col0 = [1, 2, 3, 4, 5],             DType = INT32
+   * //   col1 = ["a", "b", "c", "d", "e"],   DType = STRING
+   * }</pre>
+   *
+   * @param tables the tables to concatenate
+   * @return the concatenated table
    */
   public static Table concatenate(Table... tables) {
     if (tables.length < 2) {
@@ -2127,10 +2144,13 @@ public final class Table implements AutoCloseable {
    * Interleave all columns into a single column. Columns must all have the same data type and length.
    *
    * Example:
-   * ```
-   * input  = [[A1, A2, A3], [B1, B2, B3]]
-   * return = [A1, B1, A2, B2, A3, B3]
-   * ```
+   * <pre>{@code
+   * // table:
+   * //   col0 = [1, 2, 3], DType = INT32
+   * //   col1 = [4, 5, 6], DType = INT32
+   * ColumnVector result = table.interleaveColumns();
+   * // result = [1, 4, 2, 5, 3, 6], DType = INT32
+   * }</pre>
    *
    * @return The interleaved columns as a single column
    */
@@ -2141,6 +2161,18 @@ public final class Table implements AutoCloseable {
 
   /**
    * Repeat each row of this table count times.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = [1, 2],      DType = INT32
+   * //   col1 = ["a", "b"],  DType = STRING
+   * Table result = table.repeat(3);
+   * // result:
+   * //   col0 = [1, 1, 1, 2, 2, 2],             DType = INT32
+   * //   col1 = ["a", "a", "a", "b", "b", "b"], DType = STRING
+   * }</pre>
+   *
    * @param count the number of times to repeat each row.
    * @return the new Table.
    */
@@ -2151,6 +2183,19 @@ public final class Table implements AutoCloseable {
   /**
    * Create a new table by repeating each row of this table. The number of
    * repetitions of each row is defined by the corresponding value in counts.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = [1, 2],      DType = INT32
+   * //   col1 = ["a", "b"],  DType = STRING
+   * // counts = [1, 4],      DType = INT32
+   * Table result = table.repeat(counts);
+   * // result:
+   * //   col0 = [1, 2, 2, 2, 2],                DType = INT32
+   * //   col1 = ["a", "b", "b", "b", "b"],      DType = STRING
+   * }</pre>
+   *
    * @param counts the number of times to repeat each row. Cannot have nulls, must be an
    *               Integer type, and must have one entry for each row in the table.
    * @return the new Table.
@@ -2164,6 +2209,18 @@ public final class Table implements AutoCloseable {
    * Partition this table using the mapping in partitionMap. partitionMap must be an integer
    * column. The number of rows in partitionMap must be the same as this table.  Each row
    * in the map will indicate which partition the rows in the table belong to.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = [1, 2, 3, 4, 5, 6], DType = INT32
+   * // partitionMap = [1, 2, 1, 2, 1, 2], DType = INT32
+   * PartitionedTable result = table.partition(partitionMap, 3);
+   * // result table (rows reordered by partition, order within partitions is not guaranteed):
+   * //   col0 = [1, 3, 5, 2, 4, 6], DType = INT32
+   * // partitions = [0, 0, 3, 6]  (partition 0 is empty, partition 1 has rows 0..2, partition 2 has rows 3..5)
+   * }</pre>
+   *
    * @param partitionMap the partitions for each row.
    * @param numberOfPartitions number of partitions
    * @return {@link PartitionedTable} Table that exposes a limited functionality of the
@@ -2180,26 +2237,34 @@ public final class Table implements AutoCloseable {
 
   /**
    * Find smallest indices in a sorted table where values should be inserted to maintain order.
-   * <pre>
+   *
+   * The input table and the values table need to be non-empty (row count > 0).
+   *
    * Example:
+   * <pre>{@code
+   * // Single column (sorted ascending):
+   * // inputTable:
+   * //   col0 = [10, 20, 20, 30, 50], DType = INT32
+   * // valueTable:
+   * //   col0 = [20], DType = INT32
+   * ColumnVector result = inputTable.lowerBound(
+   *     new boolean[]{false}, valueTable, new boolean[]{false});
+   * // result = [1], DType = INT32
    *
-   *  Single column:
-   *      idx            0   1   2   3   4
-   *   inputTable  =   { 10, 20, 20, 30, 50 }
-   *   valuesTable =   { 20 }
-   *   result      =   { 1 }
+   * // Multi column (sorted ascending on all columns):
+   * // inputTable:
+   * //   col0 = [10,  20,  20,  20,  20],  DType = INT32
+   * //   col1 = [5.0, 0.5, 0.5, 0.7, 0.7], DType = FLOAT64
+   * //   col2 = [90,  77,  78,  61,  61],   DType = INT32
+   * // valueTable:
+   * //   col0 = [20],  DType = INT32
+   * //   col1 = [0.7], DType = FLOAT64
+   * //   col2 = [61],  DType = INT32
+   * ColumnVector result2 = inputTable.lowerBound(
+   *     new boolean[]{false, false, false}, valueTable, new boolean[]{false, false, false});
+   * // result2 = [3], DType = INT32
+   * }</pre>
    *
-   *  Multi Column:
-   *      idx                0    1    2    3    4
-   *   inputTable      = {{  10,  20,  20,  20,  20 },
-   *                      { 5.0,  .5,  .5,  .7,  .7 },
-   *                      {  90,  77,  78,  61,  61 }}
-   *   valuesTable     = {{ 20 },
-   *                      { .7 },
-   *                      { 61 }}
-   *   result          = {  3 }
-   * </pre>
-   * The input table and the values table need to be non-empty (row count > 0)
    * @param areNullsSmallest per column, true if nulls are assumed smallest
    * @param valueTable the table of values to find insertion locations for
    * @param descFlags per column indicates the ordering, true if descending.
@@ -2215,7 +2280,18 @@ public final class Table implements AutoCloseable {
   /**
    * Find smallest indices in a sorted table where values should be inserted to maintain order.
    * This is a convenience method. It pulls out the columns indicated by the args and sets up the
-   * ordering properly to call `lowerBound`.
+   * ordering properly to call {@code lowerBound}.
+   *
+   * Example:
+   * <pre>{@code
+   * // inputTable (sorted ascending on col0):
+   * //   col0 = [10, 20, 20, 30, 50], DType = INT32
+   * // valueTable:
+   * //   col0 = [20], DType = INT32
+   * ColumnVector result = inputTable.lowerBound(valueTable, OrderByArg.asc(0));
+   * // result = [1], DType = INT32
+   * }</pre>
+   *
    * @param valueTable the table of values to find insertion locations for
    * @param args the sort order used to sort this table.
    * @return ColumnVector with lower bound indices for all rows in valueTable
@@ -2240,26 +2316,34 @@ public final class Table implements AutoCloseable {
   /**
    * Find largest indices in a sorted table where values should be inserted to maintain order.
    * Given a sorted table return the upper bound.
-   * <pre>
+   *
+   * The input table and the values table need to be non-empty (row count > 0).
+   *
    * Example:
+   * <pre>{@code
+   * // Single column (sorted ascending):
+   * // inputTable:
+   * //   col0 = [10, 20, 20, 30, 50], DType = INT32
+   * // valueTable:
+   * //   col0 = [20], DType = INT32
+   * ColumnVector result = inputTable.upperBound(
+   *     new boolean[]{false}, valueTable, new boolean[]{false});
+   * // result = [3], DType = INT32
    *
-   *  Single column:
-   *      idx            0   1   2   3   4
-   *   inputTable  =   { 10, 20, 20, 30, 50 }
-   *   valuesTable =   { 20 }
-   *   result      =   { 3 }
+   * // Multi column (sorted ascending on all columns):
+   * // inputTable:
+   * //   col0 = [10,  20,  20,  20,  20],  DType = INT32
+   * //   col1 = [5.0, 0.5, 0.5, 0.7, 0.7], DType = FLOAT64
+   * //   col2 = [90,  77,  78,  61,  61],   DType = INT32
+   * // valueTable:
+   * //   col0 = [20],  DType = INT32
+   * //   col1 = [0.7], DType = FLOAT64
+   * //   col2 = [61],  DType = INT32
+   * ColumnVector result2 = inputTable.upperBound(
+   *     new boolean[]{false, false, false}, valueTable, new boolean[]{false, false, false});
+   * // result2 = [5], DType = INT32
+   * }</pre>
    *
-   *  Multi Column:
-   *      idx                0    1    2    3    4
-   *   inputTable      = {{  10,  20,  20,  20,  20 },
-   *                      { 5.0,  .5,  .5,  .7,  .7 },
-   *                      {  90,  77,  78,  61,  61 }}
-   *   valuesTable     = {{ 20 },
-   *                      { .7 },
-   *                      { 61 }}
-   *   result          = {  5 }
-   * </pre>
-   * The input table and the values table need to be non-empty (row count > 0)
    * @param areNullsSmallest per column, true if nulls are assumed smallest
    * @param valueTable the table of values to find insertion locations for
    * @param descFlags per column indicates the ordering, true if descending.
@@ -2275,7 +2359,18 @@ public final class Table implements AutoCloseable {
   /**
    * Find largest indices in a sorted table where values should be inserted to maintain order.
    * This is a convenience method. It pulls out the columns indicated by the args and sets up the
-   * ordering properly to call `upperBound`.
+   * ordering properly to call {@code upperBound}.
+   *
+   * Example:
+   * <pre>{@code
+   * // inputTable (sorted ascending on col0):
+   * //   col0 = [10, 20, 20, 30, 50], DType = INT32
+   * // valueTable:
+   * //   col0 = [20], DType = INT32
+   * ColumnVector result = inputTable.upperBound(valueTable, OrderByArg.asc(0));
+   * // result = [3], DType = INT32
+   * }</pre>
+   *
    * @param valueTable the table of values to find insertion locations for
    * @param args the sort order used to sort this table.
    * @return ColumnVector with upper bound indices for all rows in valueTable
@@ -2309,6 +2404,19 @@ public final class Table implements AutoCloseable {
   /**
    * Joins two tables all of the left against all of the right. Be careful as this
    * gets very big and you can easily use up all of the GPUs memory.
+   *
+   * Example:
+   * <pre>{@code
+   * // left:
+   * //   col0 = [100, 101, 102], DType = INT32
+   * // right:
+   * //   col0 = [200, 201],      DType = INT32
+   * Table result = left.crossJoin(right);
+   * // result:
+   * //   col0 = [100, 100, 101, 101, 102, 102], DType = INT32
+   * //   col1 = [200, 201, 200, 201, 200, 201], DType = INT32
+   * }</pre>
+   *
    * @param right the right table
    * @return the joined table.  The order of the columns returned will be left columns,
    * right columns.
@@ -2325,6 +2433,17 @@ public final class Table implements AutoCloseable {
    * Get back a gather map that can be used to sort the data. This allows you to sort by data
    * that does not appear in the final result and not pay the cost of gathering the data that
    * is only needed for sorting.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = [5, 3, 3, 1, 1], DType = INT32
+   * //   col1 = [5, 3, 4, 1, 2], DType = INT32
+   * ColumnVector gatherMap = table.sortOrder(OrderByArg.asc(0), OrderByArg.desc(1));
+   * // gatherMap = [4, 3, 2, 1, 0], DType = INT32
+   * // Use with table.gather(gatherMap) to get the sorted table.
+   * }</pre>
+   *
    * @param args what order to sort the data by
    * @return a gather map
    */
@@ -2348,8 +2467,20 @@ public final class Table implements AutoCloseable {
    * Orders the table using the sortkeys returning a new allocated table. The caller is
    * responsible for cleaning up
    * the {@link ColumnVector} returned as part of the output {@link Table}
-   * <p>
-   * Example usage: orderBy(true, OrderByArg.asc(0), OrderByArg.desc(3)...);
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = [5, 3, 3, 1, 1], DType = INT32
+   * //   col1 = [5, 3, 4, 1, 2], DType = INT32
+   * //   col2 = [1, 3, 5, 7, 9], DType = INT32
+   * Table result = table.orderBy(OrderByArg.asc(0), OrderByArg.desc(1));
+   * // result:
+   * //   col0 = [1, 1, 3, 3, 5], DType = INT32
+   * //   col1 = [2, 1, 4, 3, 5], DType = INT32
+   * //   col2 = [9, 7, 5, 3, 1], DType = INT32
+   * }</pre>
+   *
    * @param args Suppliers to initialize sortKeys.
    * @return Sorted Table
    */
@@ -2373,6 +2504,21 @@ public final class Table implements AutoCloseable {
    * Merge multiple already sorted tables keeping the sort order the same.
    * This is a more efficient version of concatenate followed by orderBy, but requires that
    * the input already be sorted.
+   *
+   * Example:
+   * <pre>{@code
+   * // t1 (pre-sorted by col0 asc, col1 desc):
+   * //   col0 = [1, 1, 3, 3, 5], DType = INT32
+   * //   col1 = [2, 1, 4, 3, 5], DType = INT32
+   * // t2 (pre-sorted by col0 asc, col1 desc):
+   * //   col0 = [1, 2, 7],       DType = INT32
+   * //   col1 = [3, 2, 2],       DType = INT32
+   * Table result = Table.merge(new Table[]{t1, t2}, OrderByArg.asc(0), OrderByArg.desc(1));
+   * // result:
+   * //   col0 = [1, 1, 1, 2, 3, 3, 5, 7], DType = INT32
+   * //   col1 = [3, 2, 1, 2, 4, 3, 5, 2], DType = INT32
+   * }</pre>
+   *
    * @param tables the tables that should be merged.
    * @param args the ordering of the tables.  Should match how they were sorted
    *             initially.
@@ -2407,7 +2553,20 @@ public final class Table implements AutoCloseable {
   /**
    * Merge multiple already sorted tables keeping the sort order the same.
    * This is a more efficient version of concatenate followed by orderBy, but requires that
-   * the input already be sorted.
+   * the input already be sorted. This is a convenience overload that accepts a
+   * {@code List<Table>} instead of an array.
+   *
+   * Example:
+   * <pre>{@code
+   * // t1 (pre-sorted by col0 asc):
+   * //   col0 = [1, 3, 5], DType = INT32
+   * // t2 (pre-sorted by col0 asc):
+   * //   col0 = [2, 4, 6], DType = INT32
+   * Table result = Table.merge(Arrays.asList(t1, t2), OrderByArg.asc(0));
+   * // result:
+   * //   col0 = [1, 2, 3, 4, 5, 6], DType = INT32
+   * }</pre>
+   *
    * @param tables the tables that should be merged.
    * @param args the ordering of the tables.  Should match how they were sorted
    *             initially.
@@ -2451,6 +2610,17 @@ public final class Table implements AutoCloseable {
    * When the last partition is reached then next partition is partition 0 and the algorithm
    * continues until all rows have been placed in partitions, evenly distributing the rows
    * among the partitions.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = [1, 2, 3, 4, 5, 6], DType = INT32
+   * PartitionedTable result = table.roundRobinPartition(3, 0);
+   * // result table (rows reordered into partitions round-robin):
+   * //   col0 = [1, 4, 2, 5, 3, 6], DType = INT32
+   * // partitions = [0, 2, 4, 6]  (partition 0: rows 0..1, partition 1: rows 2..3, partition 2: rows 4..5)
+   * }</pre>
+   *
    * @param numberOfPartitions - number of partitions to use
    * @param startPartition - starting partition index (i.e.: where first row is placed).
    * @return - {@link PartitionedTable} - Table that exposes a limited functionality of the
@@ -2481,16 +2651,29 @@ public final class Table implements AutoCloseable {
   /**
    * Filters this table using a column of boolean values as a mask, returning a new one.
    * <p>
-   * Given a mask column, each element `i` from the input columns
-   * is copied to the output columns if the corresponding element `i` in the mask is
-   * non-null and `true`. This operation is stable: the input order is preserved.
+   * Given a mask column, each element {@code i} from the input columns
+   * is copied to the output columns if the corresponding element {@code i} in the mask is
+   * non-null and {@code true}. This operation is stable: the input order is preserved.
    * <p>
    * This table and mask columns must have the same number of rows.
    * <p>
    * The output table has size equal to the number of elements in boolean_mask
-   * that are both non-null and `true`.
+   * that are both non-null and {@code true}.
    * <p>
    * If the original table row count is zero, there is no error, and an empty table is returned.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = [10, 20, 30, 40, 50], DType = INT32
+   * //   col1 = ["a", "b", "c", "d", "e"], DType = STRING
+   * // mask = [true, false, true, false, true], DType = BOOL8
+   * Table result = table.filter(mask);
+   * // result:
+   * //   col0 = [10, 30, 50],      DType = INT32
+   * //   col1 = ["a", "c", "e"],   DType = STRING
+   * }</pre>
+   *
    * @param mask column of type {@link DType#BOOL8} used as a mask to filter
    *             the input column
    * @return table containing copy of all elements of this table passing
@@ -2525,6 +2708,17 @@ public final class Table implements AutoCloseable {
    *
    * The order of rows in the output table is not specified.
    *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = [5, null, 3, 5, 8, 1],          DType = INT32
+   * //   col1 = [20, null, null, 19, 21, 19],    DType = INT32
+   * Table result = table.dropDuplicates(new int[]{1}, DuplicateKeepOption.KEEP_FIRST, true);
+   * // result (sorted for illustration):
+   * //   col0 = [null, 5,  5,  8],   DType = INT32
+   * //   col1 = [null, 19, 20, 21],  DType = INT32
+   * }</pre>
+   *
    * @param keyColumns Array of indices representing key columns from the current table.
    * @param keep Option specifying to keep any, first, last, or none of the found duplicates.
    * @param nullsEqual Flag to denote whether nulls are treated as equal when comparing rows of the
@@ -2539,6 +2733,17 @@ public final class Table implements AutoCloseable {
 
   /**
    * Count how many rows in the table are distinct from one another.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = [5, 3, null, null, 5], DType = INT32
+   * int count = table.distinctCount(NullEquality.EQUAL);
+   * // count = 3  (values: 5, 3, null)
+   * int countUnequal = table.distinctCount(NullEquality.UNEQUAL);
+   * // countUnequal = 4  (values: 5, 3, null, null — each null is distinct)
+   * }</pre>
+   *
    * @param nullsEqual if nulls should be considered equal to each other or not.
    */
   public int distinctCount(NullEquality nullsEqual) {
@@ -2548,6 +2753,14 @@ public final class Table implements AutoCloseable {
   /**
    * Count how many rows in the table are distinct from one another.
    * Nulls are considered to be equal to one another.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = [5, 3, null, null, 5], DType = INT32
+   * int count = table.distinctCount();
+   * // count = 3  (values: 5, 3, null)
+   * }</pre>
    */
   public int distinctCount() {
     return distinctCount(nativeHandle, true);
@@ -2558,14 +2771,18 @@ public final class Table implements AutoCloseable {
    * in a contiguous range of memory.  This allows for us to optimize copying the data in a single
    * operation.
    *
-   * <code>
    * Example:
-   * input:   [{10, 12, 14, 16, 18, 20, 22, 24, 26, 28},
-   *           {50, 52, 54, 56, 58, 60, 62, 64, 66, 68}]
-   * splits:  {2, 5, 9}
-   * output:  [{{10, 12}, {14, 16, 18}, {20, 22, 24, 26}, {28}},
-   *           {{50, 52}, {54, 56, 58}, {60, 62, 64, 66}, {68}}]
-   * </code>
+   * <pre>{@code
+   * // table:
+   * //   col0 = [10, 12, 14, 16, 18, 20, 22, 24, 26, 28], DType = INT32
+   * //   col1 = [50, 52, 54, 56, 58, 60, 62, 64, 66, 68], DType = INT32
+   * ContiguousTable[] result = table.contiguousSplit(2, 5, 9);
+   * // result[0]:  col0 = [10, 12],          col1 = [50, 52]
+   * // result[1]:  col0 = [14, 16, 18],      col1 = [54, 56, 58]
+   * // result[2]:  col0 = [20, 22, 24, 26],  col1 = [60, 62, 64, 66]
+   * // result[3]:  col0 = [28],              col1 = [68]
+   * }</pre>
+   *
    * @param indices A vector of indices where to make the split
    * @return The tables split at those points. NOTE: It is the responsibility of the caller to
    * close the result. Each table and column holds a reference to the original buffer. But both
@@ -2618,33 +2835,19 @@ public final class Table implements AutoCloseable {
    *
    * Any list is exploded, which means the elements of the list in each row are expanded
    * into new rows in the output. The corresponding rows for other columns in the input
-   * are duplicated.
+   * are duplicated. Null lists are completely removed from the output and nulls inside
+   * lists are pulled out and remain.
    *
-   * <code>
    * Example:
-   * input:  [[5,10,15], 100],
-   *         [[20,25],   200],
-   *         [[30],      300]
-   * index: 0
-   * output: [5,         100],
-   *         [10,        100],
-   *         [15,        100],
-   *         [20,        200],
-   *         [25,        200],
-   *         [30,        300]
-   * </code>
-   *
-   * Nulls propagate in different ways depending on what is null.
-   * <code>
-   * input:  [[5,null,15], 100],
-   *         [null,        200]
-   * index: 0
-   * output: [5,           100],
-   *         [null,        100],
-   *         [15,          100]
-   * </code>
-   * Note that null lists are completely removed from the output
-   * and nulls inside lists are pulled out and remain.
+   * <pre>{@code
+   * // table:
+   * //   col0 = [[5, 10, 15], [20, 25], [30]], DType = LIST of INT32
+   * //   col1 = [100,         200,       300],  DType = INT32
+   * Table result = table.explode(0);
+   * // result:
+   * //   col0 = [5,  10, 15, 20, 25, 30], DType = INT32
+   * //   col1 = [100,100,100,200,200,300], DType = INT32
+   * }</pre>
    *
    * @param index Column index to explode inside the table.
    * @return A new table with explode_col exploded.
@@ -2660,32 +2863,20 @@ public final class Table implements AutoCloseable {
    *
    * Any list is exploded, which means the elements of the list in each row are expanded into new rows
    * in the output. The corresponding rows for other columns in the input are duplicated. A position
-   * column is added that has the index inside the original list for each row. Example:
-   * <code>
-   * input:  [[5,10,15], 100],
-   *         [[20,25],   200],
-   *         [[30],      300]
-   * index: 0
-   * output: [0,   5,    100],
-   *         [1,   10,   100],
-   *         [2,   15,   100],
-   *         [0,   20,   200],
-   *         [1,   25,   200],
-   *         [0,   30,   300]
-   * </code>
+   * column is added that has the index inside the original list for each row. Null lists are not
+   * included in the resulting table, but nulls inside lists are preserved.
    *
-   * Nulls and empty lists propagate in different ways depending on what is null or empty.
-   * <code>
-   * input:  [[5,null,15], 100],
-   *         [null,        200]
-   * index: 0
-   * output: [5,           100],
-   *         [null,        100],
-   *         [15,          100]
-   * </code>
-   *
-   * Note that null lists are not included in the resulting table, but nulls inside
-   * lists and empty lists will be represented with a null entry for that column in that row.
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = [[5, 10, 15], [20, 25], [30]], DType = LIST of INT32
+   * //   col1 = [100,         200,       300],  DType = INT32
+   * Table result = table.explodePosition(0);
+   * // result:
+   * //   col0 = [0, 1,  2,  0,  1,  0],   DType = INT32  (position)
+   * //   col1 = [5, 10, 15, 20, 25, 30],  DType = INT32  (exploded values)
+   * //   col2 = [100,100,100,200,200,300], DType = INT32
+   * }</pre>
    *
    * @param index Column index to explode inside the table.
    * @return A new table with exploded value and position. The column order of return table is
@@ -2698,38 +2889,21 @@ public final class Table implements AutoCloseable {
   }
 
   /**
-   * Explodes a list column's elements.
+   * Explodes a list column's elements, retaining any null entries or empty lists as a null row.
    *
-   * Any list is exploded, which means the elements of the list in each row are expanded
-   * into new rows in the output. The corresponding rows for other columns in the input
-   * are duplicated.
+   * Unlike {@link #explode(int)}, null list entries produce a null row in the output instead
+   * of being removed entirely.
    *
-   * <code>
    * Example:
-   * input:  [[5,10,15], 100],
-   *         [[20,25],   200],
-   *         [[30],      300],
-   * index: 0
-   * output: [5,         100],
-   *         [10,        100],
-   *         [15,        100],
-   *         [20,        200],
-   *         [25,        200],
-   *         [30,        300]
-   * </code>
-   *
-   * Nulls propagate in different ways depending on what is null.
-   * <code>
-   *  input:  [[5,null,15], 100],
-   *          [null,        200]
-   * index: 0
-   * output:  [5,           100],
-   *          [null,        100],
-   *          [15,          100],
-   *          [null,        200]
-   * </code>
-   * Note that null lists are completely removed from the output
-   * and nulls inside lists are pulled out and remain.
+   * <pre>{@code
+   * // table:
+   * //   col0 = [[5, 10, 15], null,  [30]], DType = LIST of INT32
+   * //   col1 = [100,         200,   300],  DType = INT32
+   * Table result = table.explodeOuter(0);
+   * // result:
+   * //   col0 = [5,  10, 15, null, 30],   DType = INT32
+   * //   col1 = [100,100,100,200, 300],   DType = INT32
+   * }</pre>
    *
    * @param index Column index to explode inside the table.
    * @return A new table with explode_col exploded.
@@ -2744,38 +2918,20 @@ public final class Table implements AutoCloseable {
    * Explodes a list column's elements retaining any null entries or empty lists and includes a
    * position column.
    *
-   * Any list is exploded, which means the elements of the list in each row are expanded into new rows
-   * in the output. The corresponding rows for other columns in the input are duplicated. A position
-   * column is added that has the index inside the original list for each row. Example:
+   * Unlike {@link #explodePosition(int)}, null list entries and empty lists produce a null row
+   * in the output instead of being removed entirely.
    *
-   * <code>
    * Example:
-   * input:  [[5,10,15], 100],
-   *         [[20,25],   200],
-   *         [[30],      300],
-   * index: 0
-   * output: [0,   5,    100],
-   *         [1,   10,   100],
-   *         [2,   15,   100],
-   *         [0,   20,   200],
-   *         [1,   25,   200],
-   *         [0,   30,   300]
-   * </code>
-   *
-   * Nulls and empty lists propagate as null entries in the result.
-   * <code>
-   * input:  [[5,null,15], 100],
-   *         [null,        200],
-   *         [[],          300]
-   * index: 0
-   * output: [0,     5,    100],
-   *         [1,  null,    100],
-   *         [2,    15,    100],
-   *         [0,  null,    200],
-   *         [0,  null,    300]
-   * </code>
-   *
-   *    returns
+   * <pre>{@code
+   * // table:
+   * //   col0 = [[5, null, 15], null, []],  DType = LIST of INT32
+   * //   col1 = [100,           200,  300], DType = INT32
+   * Table result = table.explodeOuterPosition(0);
+   * // result:
+   * //   col0 = [0,    1,    2,    0,    0],    DType = INT32  (position)
+   * //   col1 = [5,    null, 15,   null, null], DType = INT32  (exploded values)
+   * //   col2 = [100,  100,  100,  200,  300],  DType = INT32
+   * }</pre>
    *
    * @param index Column index to explode inside the table.
    * @return A new table with exploded value and position. The column order of return table is
@@ -2810,14 +2966,28 @@ public final class Table implements AutoCloseable {
   }
 
   /**
-   * Gathers the rows of this table according to `gatherMap` such that row "i"
+   * Gathers the rows of this table according to {@code gatherMap} such that row "i"
    * in the resulting table's columns will contain row "gatherMap[i]" from this table.
    * The number of rows in the result table will be equal to the number of elements in
-   * `gatherMap`.
+   * {@code gatherMap}.
    *
-   * A negative value `i` in the `gatherMap` is interpreted as `i+n`, where
-   * `n` is the number of rows in this table.
-
+   * A negative value {@code i} in the {@code gatherMap} is interpreted as {@code i+n}, where
+   * {@code n} is the number of rows in this table.
+   *
+   * Out-of-bounds indices are replaced with nulls in the output.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = ["a", "b", "c", "d"], DType = STRING
+   * //   col1 = [10,  20,  30,  40],  DType = INT32
+   * // gatherMap = [3, 1, 2], DType = INT32
+   * Table result = table.gather(gatherMap);
+   * // result:
+   * //   col0 = ["d", "b", "c"], DType = STRING
+   * //   col1 = [40,  20,  30],  DType = INT32
+   * }</pre>
+   *
    * @param gatherMap the map of indexes.  Must be non-nullable and integral type.
    * @return the resulting Table.
    */
@@ -2826,16 +2996,29 @@ public final class Table implements AutoCloseable {
   }
 
   /**
-   * Gathers the rows of this table according to `gatherMap` such that row "i"
+   * Gathers the rows of this table according to {@code gatherMap} such that row "i"
    * in the resulting table's columns will contain row "gatherMap[i]" from this table.
    * The number of rows in the result table will be equal to the number of elements in
-   * `gatherMap`.
+   * {@code gatherMap}.
    *
-   * A negative value `i` in the `gatherMap` is interpreted as `i+n`, where
-   * `n` is the number of rows in this table.
+   * A negative value {@code i} in the {@code gatherMap} is interpreted as {@code i+n}, where
+   * {@code n} is the number of rows in this table.
+   *
+   * Example:
+   * <pre>{@code
+   * // table:
+   * //   col0 = ["a", "b", "c", "d"], DType = STRING
+   * //   col1 = [10,  20,  30,  40],  DType = INT32
+   * // gatherMap         = [3, 1, 2],         DType = INT32
+   * // outOfBoundsPolicy = OutOfBoundsPolicy.DONT_CHECK
+   * Table result = table.gather(gatherMap, OutOfBoundsPolicy.DONT_CHECK);
+   * // result:
+   * //   col0 = ["d", "b", "c"], DType = STRING
+   * //   col1 = [40,  20,  30],  DType = INT32
+   * }</pre>
    *
    * @param gatherMap the map of indexes.  Must be non-nullable and integral type.
-   * @param outOfBoundsPolicy policy to use when an out-of-range value is in `gatherMap`.
+   * @param outOfBoundsPolicy policy to use when an out-of-range value is in {@code gatherMap}.
    * @return the resulting Table.
    */
   public Table gather(ColumnView gatherMap, OutOfBoundsPolicy outOfBoundsPolicy) {
@@ -2845,17 +3028,32 @@ public final class Table implements AutoCloseable {
 
   /**
    * Scatters values from the source table into the target table out-of-place, returning a new
-   * result table. The scatter is performed according to a scatter map such that row `scatterMap[i]`
-   * of the destination table gets row `i` of the source table. All other rows of the destination
-   * table equal corresponding rows of the target table.
+   * result table. The scatter is performed according to a scatter map such that row
+   * {@code scatterMap[i]} of the destination table gets row {@code i} of the source table. All
+   * other rows of the destination table equal corresponding rows of the target table.
    *
    * The number of columns in source must match the number of columns in target and their
    * corresponding data types must be the same.
    *
    * If the same index appears more than once in the scatter map, the result is undefined.
    *
-   * A negative value `i` in the `scatterMap` is interpreted as `i + n`, where `n` is the number of
-   * rows in the `target` table.
+   * A negative value {@code i} in the {@code scatterMap} is interpreted as {@code i + n},
+   * where {@code n} is the number of rows in the {@code target} table.
+   *
+   * Example:
+   * <pre>{@code
+   * // source:
+   * //   col0 = [1, 2, 3, 4],               DType = INT32
+   * //   col1 = ["A", "AA", "AAA", "AAAA"], DType = STRING
+   * // scatterMap = [0, 2, 4, -2], DType = INT32
+   * // target:
+   * //   col0 = [-1, -2, -3, -4, -5],                   DType = INT32
+   * //   col1 = ["B", "BB", "BBB", "BBBB", "BBBBB"],    DType = STRING
+   * Table result = source.scatter(scatterMap, target);
+   * // result:
+   * //   col0 = [1, -2, 2, 4, 3],                   DType = INT32
+   * //   col1 = ["A", "BB", "AA", "AAAA", "AAA"],   DType = STRING
+   * }</pre>
    *
    * @param scatterMap The map of indexes. Must be non-nullable and integral type.
    * @param target The table into which rows from the current table are to be scattered out-of-place.
@@ -2867,18 +3065,31 @@ public final class Table implements AutoCloseable {
   }
 
   /**
-   * Scatters values from the source rows into the target table out-of-place, returning a new result
-   * table. The scatter is performed according to a scatter map such that row `scatterMap[i]` of the
-   * destination table is replaced by the source row `i`. All other rows of the destination table
-   * equal corresponding rows of the target table.
+   * Scatters values from the source scalars into the target table out-of-place, returning a new
+   * result table. The scatter is performed according to a scatter map such that row
+   * {@code scatterMap[i]} of the destination table is replaced by the source scalar {@code i}. All
+   * other rows of the destination table equal corresponding rows of the target table.
    *
    * The number of elements in source must match the number of columns in target and their
    * corresponding data types must be the same.
    *
    * If the same index appears more than once in the scatter map, the result is undefined.
    *
-   * A negative value `i` in the `scatterMap` is interpreted as `i + n`, where `n` is the number of
-   * rows in the `target` table.
+   * A negative value {@code i} in the {@code scatterMap} is interpreted as {@code i + n},
+   * where {@code n} is the number of rows in the {@code target} table.
+   *
+   * Example:
+   * <pre>{@code
+   * // source = [Scalar(99), Scalar("X")]
+   * // scatterMap = [1, 3], DType = INT32
+   * // target:
+   * //   col0 = [10, 20, 30, 40, 50], DType = INT32
+   * //   col1 = ["a", "b", "c", "d", "e"], DType = STRING
+   * Table result = Table.scatter(source, scatterMap, target);
+   * // result:
+   * //   col0 = [10, 99, 30, 99, 50],          DType = INT32
+   * //   col1 = ["a", "X", "c", "X", "e"],     DType = STRING
+   * }</pre>
    *
    * @param source The input scalars containing values to be scattered into the target table.
    * @param scatterMap The map of indexes. Must be non-nullable and integral type.
@@ -2916,6 +3127,18 @@ public final class Table implements AutoCloseable {
    * respectively, to produce the result of the left join.
    *
    * It is the responsibility of the caller to close the resulting gather map instances.
+   *
+   * Example:
+   * <pre>{@code
+   * // leftKeys:
+   * //   col0 = [2, 3, 9, 0, 1, 7, 4, 6, 5, 8], DType = INT32
+   * // rightKeys:
+   * //   col0 = [6, 5, 9, 8, 10, 32],            DType = INT32
+   * GatherMap[] maps = leftKeys.leftJoinGatherMaps(rightKeys, false);
+   * // maps[0] (left gather map):  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+   * // maps[1] (right gather map): [inv, inv, 2, inv, inv, inv, inv, 0, 1, 3]
+   * // (inv = Integer.MIN_VALUE, meaning no match — produces null when gathered)
+   * }</pre>
    *
    * @param rightKeys join key columns from the right table
    * @param compareNullsEqual true if null key values should match otherwise false
@@ -3188,6 +3411,18 @@ public final class Table implements AutoCloseable {
    *
    * It is the responsibility of the caller to close the resulting gather map instances.
    *
+   * Example:
+   * <pre>{@code
+   * // leftKeys:
+   * //   col0 = [2, 3, 9, 0, 1, 7, 4, 6, 5, 8], DType = INT32
+   * // rightKeys:
+   * //   col0 = [6, 5, 9, 8, 10, 32],            DType = INT32
+   * GatherMap[] maps = leftKeys.innerJoinGatherMaps(rightKeys, false);
+   * // maps[0] (left gather map):  [2, 7, 8, 9]
+   * // maps[1] (right gather map): [2, 0, 1, 3]
+   * // Only matching rows are included (keys: 9, 6, 5, 8).
+   * }</pre>
+   *
    * @param rightKeys join key columns from the right table
    * @param compareNullsEqual true if null key values should match otherwise false
    * @return left and right table gather maps
@@ -3447,13 +3682,26 @@ public final class Table implements AutoCloseable {
   }
 
   /**
-   * Computes the gather maps that can be used to manifest the result of an full equi-join between
+   * Computes the gather maps that can be used to manifest the result of a full equi-join between
    * two tables. It is assumed this table instance holds the key columns from the left table, and
    * the table argument represents the key columns from the right table. Two {@link GatherMap}
    * instances will be returned that can be used to gather the left and right tables,
    * respectively, to produce the result of the full join.
    *
    * It is the responsibility of the caller to close the resulting gather map instances.
+   *
+   * Example:
+   * <pre>{@code
+   * // leftKeys:
+   * //   col0 = [2, 3, 9, null, 1, 7, 4, 6, 5, 8], DType = INT32
+   * // rightKeys:
+   * //   col0 = [6, 5, 9, 8, 10, null],              DType = INT32
+   * GatherMap[] maps = leftKeys.fullJoinGatherMaps(rightKeys, false);
+   * // maps[0] (left gather map):  [inv, inv,  0,  1, 2,  3,  4,  5,  6, 7, 8, 9]
+   * // maps[1] (right gather map): [  4,    5, inv, inv, 2, inv, inv, inv, inv, 0, 1, 3]
+   * // (inv = Integer.MIN_VALUE — produces null when gathered)
+   * // All left rows appear. Unmatched right rows (10, null) also appear with null left indices.
+   * }</pre>
    *
    * @param rightKeys join key columns from the right table
    * @param compareNullsEqual true if null key values should match otherwise false
@@ -3597,8 +3845,22 @@ public final class Table implements AutoCloseable {
    * two tables. It is assumed this table instance holds the key columns from the left table, and
    * the table argument represents the key columns from the right table. The {@link GatherMap}
    * instance returned can be used to gather the left table to produce the result of the
-   * left semi-join.
+   * left semi-join. A left semi-join returns only the left rows that have a match in the right
+   * table.
+   *
    * It is the responsibility of the caller to close the resulting gather map instance.
+   *
+   * Example:
+   * <pre>{@code
+   * // leftKeys:
+   * //   col0 = [2, 3, 9, 0, 1, 7, 4, 6, 5, 8], DType = INT32
+   * // rightKeys:
+   * //   col0 = [6, 5, 9, 8, 10, 32],            DType = INT32
+   * GatherMap map = leftKeys.leftSemiJoinGatherMap(rightKeys, false);
+   * // map (left gather map): [2, 7, 8, 9]
+   * // These are the left indices where keys match: 9, 6, 5, 8
+   * }</pre>
+   *
    * @param rightKeys join key columns from the right table
    * @param compareNullsEqual true if null key values should match otherwise false
    * @return left table gather map
@@ -3705,8 +3967,22 @@ public final class Table implements AutoCloseable {
    * two tables. It is assumed this table instance holds the key columns from the left table, and
    * the table argument represents the key columns from the right table. The {@link GatherMap}
    * instance returned can be used to gather the left table to produce the result of the
-   * left anti-join.
+   * left anti-join. A left anti-join returns only the left rows that have no match in the right
+   * table.
+   *
    * It is the responsibility of the caller to close the resulting gather map instance.
+   *
+   * Example:
+   * <pre>{@code
+   * // leftKeys:
+   * //   col0 = [2, 3, 9, 0, 1, 7, 4, 6, 5, 8], DType = INT32
+   * // rightKeys:
+   * //   col0 = [6, 5, 9, 8, 10, 32],            DType = INT32
+   * GatherMap map = leftKeys.leftAntiJoinGatherMap(rightKeys, false);
+   * // map (left gather map): [0, 1, 3, 4, 5, 6]
+   * // These are the left indices where keys do NOT match: 2, 3, 0, 1, 7, 4
+   * }</pre>
+   *
    * @param rightKeys join key columns from the right table
    * @param compareNullsEqual true if null key values should match otherwise false
    * @return left table gather map
@@ -3855,21 +4131,26 @@ public final class Table implements AutoCloseable {
 
 
   /**
-   * Gather `n` samples from table randomly
-   * Note: does not preserve the ordering
+   * Gather {@code n} samples from table randomly.
+   * Note: does not preserve the ordering.
+   *
+   * Throws if {@code n} > table rows and {@code replacement} is false, or if {@code n} < 0.
+   *
    * Example:
-   * input: {col1: {1, 2, 3, 4, 5}, col2: {6, 7, 8, 9, 10}}
-   * n: 3
-   * replacement: false
+   * <pre>{@code
+   * // table:
+   * //   col0 = [1, 2, 3, 4, 5],   DType = INT32
+   * //   col1 = [6, 7, 8, 9, 10],  DType = INT32
+   * Table result = table.sample(3, false, 42);
+   * // result (without replacement, order not guaranteed):
+   * //   col0 = [3, 1, 4],  DType = INT32
+   * //   col1 = [8, 6, 9],  DType = INT32
    *
-   * output:       {col1: {3, 1, 4}, col2: {8, 6, 9}}
-   *
-   * replacement: true
-   *
-   * output:       {col1: {3, 1, 1}, col2: {8, 6, 6}}
-   *
-   * throws "logic_error" if `n` > table rows and `replacement` == FALSE.
-   * throws "logic_error" if `n` < 0.
+   * Table result2 = table.sample(3, true, 42);
+   * // result2 (with replacement, duplicates possible):
+   * //   col0 = [3, 1, 1],  DType = INT32
+   * //   col1 = [8, 6, 6],  DType = INT32
+   * }</pre>
    *
    * @param n non-negative number of samples expected from table
    * @param replacement Allow or disallow sampling of the same row more than once.
@@ -3974,20 +4255,25 @@ public final class Table implements AutoCloseable {
     }
 
     /**
-     * Aggregates the group of columns represented by indices
-     * Usage:
-     *      aggregate(count(), max(2),...);
-     *      example:
-     *        input : 1, 1, 1
-     *                1, 2, 1
-     *                2, 4, 5
+     * Aggregates the group of columns represented by indices.
      *
-     *        table.groupBy(0, 2).count()
+     * Example:
+     * <pre>{@code
+     * // table:
+     * //   col0 = ["a", "a", "b", "a"], DType = STRING
+     * //   col1 = [1,   3,   5,   7],   DType = INT32
+     * //   col2 = [10,  20,  30,  40],  DType = INT32
+     * Table result = table.groupBy(0).aggregate(
+     *     GroupByAggregation.count().onColumn(1),
+     *     GroupByAggregation.sum().onColumn(2));
+     * // result (order of groups not guaranteed):
+     * //   col0 = ["a", "b"],  DType = STRING  (group keys)
+     * //   col1 = [3,   1],    DType = INT32   (count of col1)
+     * //   col2 = [70,  30],   DType = INT32   (sum of col2)
+     * }</pre>
      *
-     *                col0, col1
-     *        output:   1,   1
-     *                  1,   2
-     *                  2,   1 ==> aggregated count
+     * @param aggregates the aggregations to perform
+     * @return a new table with group keys followed by aggregation result columns
      */
     public Table aggregate(GroupByAggregationOnColumn... aggregates) {
       assert aggregates != null;
@@ -4353,6 +4639,27 @@ public final class Table implements AutoCloseable {
       }
     }
 
+    /**
+     * Computes a group-by scan (prefix operation) for each group defined by the
+     * grouping keys.
+     *
+     * Example:
+     * <pre>{@code
+     * // table:
+     * //   col0 = ["a", "a", "a", "b", "b"], DType = STRING
+     * //   col1 = [1,   3,   5,   10,  20],  DType = INT32
+     * Table result = table.groupBy(0).scan(
+     *     GroupByScanAggregation.sum().onColumn(1),
+     *     GroupByScanAggregation.min().onColumn(1));
+     * // result:
+     * //   col0 = ["a", "a", "a", "b", "b"], DType = STRING  (group keys)
+     * //   col1 = [1,   4,   9,   10,  30],  DType = INT32   (cumulative sum)
+     * //   col2 = [1,   1,   1,   10,  10],  DType = INT32   (cumulative min)
+     * }</pre>
+     *
+     * @param aggregates the scan aggregations to perform
+     * @return a new table with group keys followed by scan result columns
+     */
     public Table scan(GroupByScanAggregationOnColumn... aggregates) {
       assert aggregates != null;
 
@@ -4418,6 +4725,27 @@ public final class Table implements AutoCloseable {
       }
     }
 
+    /**
+     * Replaces null values in the specified columns within each group using the given
+     * replacement policy (preceding or following non-null value).
+     *
+     * Example:
+     * <pre>{@code
+     * // table:
+     * //   col0 = ["a", "a", "a", "b", "b", "b"], DType = STRING
+     * //   col1 = [null, 14.0, null, null, 11.0, null], DType = FLOAT64
+     * Table result = table.groupBy(0).replaceNulls(
+     *     ReplacePolicy.PRECEDING.onColumn(1),
+     *     ReplacePolicy.FOLLOWING.onColumn(1));
+     * // result:
+     * //   col0 = ["a",  "a",  "a",  "b",  "b",  "b"],   DType = STRING
+     * //   col1 = [null, 14.0, 14.0, null, 11.0, 11.0],  DType = FLOAT64 (preceding)
+     * //   col2 = [14.0, 14.0, null, 11.0, 11.0, null],  DType = FLOAT64 (following)
+     * }</pre>
+     *
+     * @param replacements the replacement policies and columns to apply
+     * @return a new table with nulls replaced according to the policies
+     */
     public Table replaceNulls(ReplacePolicyWithColumn... replacements) {
       assert replacements != null;
 
@@ -4447,27 +4775,21 @@ public final class Table implements AutoCloseable {
      * Splits the groups in a single table into separate tables according to the grouping keys.
      * Each split table represents a single group.
      *
-     * This API will be used by some grouping related operators to process the data
-     * group by group.
+     * Note, the order of the groups returned is NOT always the same as in the input table.
      *
      * Example:
-     *   Grouping column index: 0
-     *   Input: A table of 3 rows (two groups)
-     *             a    1
-     *             b    2
-     *             b    3
-     *
-     * Result:
-     *   Two tables, one group one table.
-     *   Result[0]:
-     *              a    1
-     *
-     *   Result[1]:
-     *              b    2
-     *              b    3
-     *
-     * Note, the order of the groups returned is NOT always the same with that in the input table.
-     * The split is done in native to avoid copying the offset array to JVM.
+     * <pre>{@code
+     * // table:
+     * //   col0 = ["a", "b", "b"], DType = STRING
+     * //   col1 = [1,    2,   3],  DType = INT32
+     * ContiguousTable[] result = table.groupBy(0).contiguousSplitGroups();
+     * // result[0]:
+     * //   col0 = ["a"], DType = STRING
+     * //   col1 = [1],   DType = INT32
+     * // result[1]:
+     * //   col0 = ["b", "b"], DType = STRING
+     * //   col1 = [2,   3],   DType = INT32
+     * }</pre>
      *
      * @return The tables split according to the groups in the table. NOTE: It is the
      * responsibility of the caller to close the result. Each table and column holds a
@@ -4565,6 +4887,18 @@ public final class Table implements AutoCloseable {
     /**
      * Hash partition a table into the specified number of partitions. Uses the default MURMUR3
      * hashing.
+     *
+     * Example:
+     * <pre>{@code
+     * // table:
+     * //   col0 = [1, 2, 3, 4, 5, 6], DType = INT32
+     * //   col1 = ["a", "b", "c", "d", "e", "f"], DType = STRING
+     * PartitionedTable result = table.onColumns(0).hashPartition(3);
+     * // result contains the table rows redistributed into 3 partitions
+     * // based on the MURMUR3 hash of col0 values.
+     * // result.getPartitions() returns partition boundary offsets.
+     * }</pre>
+     *
      * @param numberOfPartitions - number of partitions to use
      * @return - {@link PartitionedTable} - Table that exposes a limited functionality of the
      * {@link Table} class
@@ -4575,6 +4909,16 @@ public final class Table implements AutoCloseable {
 
     /**
      * Hash partition a table into the specified number of partitions.
+     *
+     * Example:
+     * <pre>{@code
+     * // table:
+     * //   col0 = [1, 2, 3, 4, 5, 6], DType = INT32
+     * PartitionedTable result = table.onColumns(0).hashPartition(HashType.MURMUR3, 4);
+     * // result contains the table rows redistributed into 4 partitions
+     * // based on MURMUR3 hash of col0.
+     * }</pre>
+     *
      * @param type the type of hash to use. Depending on the type of hash different restrictions
      *             on the hash column(s) may exist. Not all hash functions are guaranteed to work
      *             besides IDENTITY and MURMUR3.
@@ -4589,6 +4933,16 @@ public final class Table implements AutoCloseable {
 
     /**
      * Hash partition a table into the specified number of partitions.
+     *
+     * Example:
+     * <pre>{@code
+     * // table:
+     * //   col0 = [1, 2, 3, 4, 5, 6], DType = INT32
+     * PartitionedTable result = table.onColumns(0).hashPartition(HashType.MURMUR3, 4, 42);
+     * // result contains the table rows redistributed into 4 partitions
+     * // based on MURMUR3 hash of col0 with seed 42.
+     * }</pre>
+     *
      * @param type the type of hash to use. Depending on the type of hash different restrictions
      *             on the hash column(s) may exist. Not all hash functions are guaranteed to work
      *             besides IDENTITY and MURMUR3.
