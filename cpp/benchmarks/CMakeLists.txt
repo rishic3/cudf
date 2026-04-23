@@ -444,6 +444,7 @@ ConfigureNVBench(
   string/make_strings_column.cu
   string/repeat_strings.cpp
   string/replace.cpp
+  string/replace_multi.cpp
   string/replace_re.cpp
   string/reverse.cpp
   string/slice.cpp
