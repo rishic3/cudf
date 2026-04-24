@@ -56,6 +56,33 @@ struct targets_and_repls {
   std::vector<std::string> repls;
 };
 
+// Single-byte, non-alphanumeric ASCII targets (0x01..0x7F minus digits and
+// letters), each paired with its 3-byte "%XX" percent-encoded replacement.
+// This matches the CtrstatEncode Java UDF's target/replacement set exactly,
+// isolating the worst-case corner of the axis space:
+//   - target_width = 1       (no multi-byte fast-forward on hit)
+//   - num_targets  = up to 65 (full non-alnum ASCII coverage)
+//   - replacement 3x expansion (every hit grows the output)
+// `num_targets_cap` truncates the set if a smaller count is requested so the
+// (hit-per-byte, target-count) scaling can be measured independently.
+targets_and_repls build_ctrstat_targets(cudf::size_type num_targets_cap)
+{
+  targets_and_repls r;
+  auto const is_non_alnum_ascii = [](int b) {
+    return (b >= 0x01 && b < 0x30) || (b > 0x39 && b < 0x41) || (b > 0x5A && b < 0x61) ||
+           (b > 0x7A && b < 0x80);
+  };
+  for (int b = 1; b < 128 && static_cast<cudf::size_type>(r.targets.size()) < num_targets_cap;
+       ++b) {
+    if (!is_non_alnum_ascii(b)) continue;
+    r.targets.emplace_back(1, static_cast<char>(b));
+    char buf[5];
+    std::snprintf(buf, sizeof(buf), "%%%02X", b);
+    r.repls.emplace_back(buf);
+  }
+  return r;
+}
+
 // Build targets / replacements of requested count. Replacement widths are kept
 // close to target widths to hold output size roughly stable when sweeping.
 targets_and_repls build_targets(cudf::size_type num_targets, cudf::size_type target_width)
@@ -269,3 +296,61 @@ NVBENCH_BENCH(bench_replace_multi_ncu)
   .add_int64_axis("num_targets", {32})
   .add_int64_axis("target_width", {0})
   .add_int64_axis("hit_rate", {40});
+
+// CtrstatEncode-shape benchmark: replicate the Java UDF's exact target
+// configuration (up to 65 single-byte non-alnum ASCII targets, each replaced
+// with its 3-byte "%XX" percent-encoded form). Row widths and per-batch row
+// counts are chosen to bracket the UDF's observed workload (~130-byte rows,
+// ~166k rows per batch when splitting 1M rows into six 256 MB batches).
+static void bench_replace_multi_ctrstat(nvbench::state& state)
+{
+  auto const num_rows       = static_cast<cudf::size_type>(state.get_int64("num_rows"));
+  auto const row_width      = static_cast<cudf::size_type>(state.get_int64("row_width"));
+  auto const num_targets    = static_cast<cudf::size_type>(state.get_int64("num_targets"));
+  auto const hit_rate       = static_cast<cudf::size_type>(state.get_int64("hit_rate"));
+  auto constexpr target_w   = int64_t{1};
+
+  auto stream = cudf::get_default_stream();
+  state.set_cuda_stream(nvbench::make_cuda_stream_view(stream.value()));
+
+  auto const column = create_string_column(num_rows, row_width, hit_rate);
+  cudf::strings_column_view input(column->view());
+
+  auto const tr = build_ctrstat_targets(num_targets);
+  cudf::test::strings_column_wrapper targets(tr.targets.begin(), tr.targets.end());
+  cudf::test::strings_column_wrapper repls(tr.repls.begin(), tr.repls.end());
+
+  auto const data_size = column->alloc_size();
+  state.add_global_memory_reads<nvbench::int8_t>(data_size);
+  state.add_global_memory_writes<nvbench::int8_t>(data_size);
+
+  maybe_emit_cpu_baseline(column->view(),
+                          tr.targets,
+                          tr.repls,
+                          row_width,
+                          num_rows,
+                          static_cast<int64_t>(tr.targets.size()),
+                          target_w,
+                          hit_rate);
+
+  state.exec(nvbench::exec_tag::sync, [&](nvbench::launch& /*launch*/) {
+    cudf::strings::replace_multiple(
+      input, cudf::strings_column_view(targets), cudf::strings_column_view(repls));
+  });
+}
+
+NVBENCH_BENCH(bench_replace_multi_ctrstat)
+  .set_name("replace_multi_ctrstat")
+  // Row widths bracket the CtrstatEncode UDF's observed range (~130 B) plus
+  // one cell on each side. All values stay below AVG_CHAR_BYTES_THRESHOLD=256
+  // so every cell hits the replace_string_parallel path the UDF actually uses.
+  .add_int64_axis("row_width", {64, 128, 200})
+  // Includes the UDF's measured per-batch row count (~166k) plus bookends to
+  // see num_rows-scaling effects at fixed target shape.
+  .add_int64_axis("num_rows", {166667, 262144, 2097152})
+  // Sub-sweep of targets: 8 / 32 / 65. 65 = full UDF set.
+  .add_int64_axis("num_targets", {8, 32, 65})
+  // Anchor-density of create_string_column; effective per-byte hit density is
+  // ~10-15% with our 65-char non-alnum dictionary (vs ~20-30% for real URL
+  // data) but still enough to exercise the algorithmic cost.
+  .add_int64_axis("hit_rate", {5, 40});

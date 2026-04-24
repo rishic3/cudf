@@ -386,6 +386,26 @@ TEST_F(StringsReplaceTest, ReplaceMulti)
   }
 }
 
+TEST_F(StringsReplaceTest, ReplaceMultiPreservesTargetOrderWithinFirstByteBucket)
+{
+  auto const input        = cudf::test::strings_column_wrapper({"banana", "band", "cabana", "", nullptr});
+  auto const strings_view = cudf::strings_column_view(input);
+
+  // The replace_multiple contract uses target-list order to choose which
+  // target wins at a given position. This case keeps multiple matching targets
+  // under the same first-byte bucket so the optimized kernel must preserve that
+  // original ordering.
+  auto const targets      = cudf::test::strings_column_wrapper({"ba", "ban", "ana"});
+  auto const targets_view = cudf::strings_column_view(targets);
+  auto const repls        = cudf::test::strings_column_wrapper({"X", "Y", "Z"});
+  auto const repls_view   = cudf::strings_column_view(repls);
+
+  auto results = cudf::strings::replace_multiple(strings_view, targets_view, repls_view);
+
+  auto const expected = cudf::test::strings_column_wrapper({"XnZ", "Xnd", "caXna", "", nullptr});
+  CUDF_TEST_EXPECT_COLUMNS_EQUAL(*results, expected);
+}
+
 TEST_F(StringsReplaceTest, ReplaceMultiLong)
 {
   // The length of the strings are to trigger the code path governed by the

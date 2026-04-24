@@ -24,6 +24,7 @@
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
+#include <rmm/device_buffer.hpp>
 #include <rmm/device_uvector.hpp>
 
 #include <cuda/atomic>
@@ -31,11 +32,17 @@
 #include <cuda/iterator>
 #include <cuda/std/iterator>
 #include <cuda/std/tuple>
+#include <cub/cub.cuh>
 #include <thrust/binary_search.h>
 #include <thrust/copy.h>
 #include <thrust/execution_policy.h>
 #include <thrust/for_each.h>
+#include <thrust/iterator/transform_iterator.h>
+#include <thrust/sequence.h>
 #include <thrust/transform.h>
+#include <thrust/unique.h>
+
+#include <cstdint>
 
 namespace cudf {
 namespace strings {
@@ -61,6 +68,97 @@ constexpr size_type AVG_CHAR_BYTES_THRESHOLD = 256;
 using target_pair = cuda::std::tuple<int64_t, size_type>;
 
 /**
+ * @brief Sort key packing the target's first byte and original index.
+ *
+ * Packing the original index into the sort key preserves the target-list order
+ * within each first-byte bucket, which is required because replace_multiple
+ * uses the first matching target in target-list order at each position.
+ */
+constexpr uint64_t make_target_sort_key(u_char first_byte, size_type index)
+{
+  return (static_cast<uint64_t>(first_byte) << 32) | static_cast<uint32_t>(index);
+}
+
+constexpr u_char target_key_first_byte(uint64_t key)
+{
+  return static_cast<u_char>(key >> 32);
+}
+
+constexpr size_type target_key_index(uint64_t key)
+{
+  return static_cast<size_type>(static_cast<uint32_t>(key));
+}
+
+struct target_first_byte_lookup {
+  rmm::device_uvector<u_char> first_bytes;
+  rmm::device_uvector<uint64_t> sorted_target_keys;
+  rmm::device_uvector<size_type> first_byte_offsets;
+  size_type unique_first_bytes{};
+
+  target_first_byte_lookup(size_type num_targets, rmm::cuda_stream_view stream)
+    : first_bytes(num_targets, stream),
+      sorted_target_keys(num_targets, stream),
+      first_byte_offsets(num_targets, stream)
+  {
+  }
+};
+
+target_first_byte_lookup build_target_first_byte_lookup(device_span<string_view const> d_targets,
+                                                        rmm::cuda_stream_view stream)
+{
+  auto lookup = target_first_byte_lookup{static_cast<size_type>(d_targets.size()), stream};
+
+  auto const key_itr = thrust::make_transform_iterator(
+    cuda::counting_iterator<size_type>{0},
+    cuda::proclaim_return_type<uint64_t>([d_targets] __device__(size_type idx) -> uint64_t {
+      auto const d_tgt      = d_targets[idx];
+      auto const first_byte = d_tgt.empty() ? u_char{0} : static_cast<u_char>(d_tgt.data()[0]);
+      return make_target_sort_key(first_byte, idx);
+    }));
+
+  auto const num_items = d_targets.size();
+  auto const sv        = stream.value();
+
+  std::size_t tmp_bytes = 0;
+  cub::DeviceMergeSort::SortKeysCopy(
+    nullptr,
+    tmp_bytes,
+    key_itr,
+    lookup.sorted_target_keys.begin(),
+    num_items,
+    cuda::std::less{},
+    sv);
+  auto tmp_stg = rmm::device_buffer(tmp_bytes, stream);
+  cub::DeviceMergeSort::SortKeysCopy(tmp_stg.data(),
+                                     tmp_bytes,
+                                     key_itr,
+                                     lookup.sorted_target_keys.begin(),
+                                     num_items,
+                                     cuda::std::less{},
+                                     sv);
+
+  thrust::transform(rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
+                    lookup.sorted_target_keys.begin(),
+                    lookup.sorted_target_keys.end(),
+                    lookup.first_bytes.begin(),
+                    cuda::proclaim_return_type<u_char>(
+                      [] __device__(uint64_t key) { return target_key_first_byte(key); }));
+
+  thrust::sequence(rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
+                   lookup.first_byte_offsets.begin(),
+                   lookup.first_byte_offsets.end());
+  auto const end =
+    thrust::unique_by_key(rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
+                          lookup.first_bytes.begin(),
+                          lookup.first_bytes.end(),
+                          lookup.first_byte_offsets.begin());
+  lookup.unique_first_bytes =
+    static_cast<size_type>(cuda::std::distance(lookup.first_bytes.begin(), end.first));
+
+  return lookup;
+}
+
+/**
  * @brief Helper functions for performing character-parallel replace
  */
 struct replace_multi_parallel_fn {
@@ -78,6 +176,23 @@ struct replace_multi_parallel_fn {
 
   __device__ bool is_valid(size_type idx) const { return d_strings.is_valid(idx); }
 
+  __device__ bool get_target_key_range(char const* d_chars,
+                                       size_type& first_idx,
+                                       size_type& last_idx) const
+  {
+    auto const chr      = static_cast<u_char>(*d_chars);
+    auto const last_ptr = d_first_bytes + unique_first_bytes;
+    auto const byte_ptr = thrust::lower_bound(thrust::seq, d_first_bytes, last_ptr, chr);
+    if ((byte_ptr == last_ptr) || (*byte_ptr != chr)) { return false; }
+
+    auto const offset_idx = static_cast<size_type>(cuda::std::distance(d_first_bytes, byte_ptr));
+    first_idx             = d_first_byte_offsets[offset_idx];
+    last_idx              = (offset_idx + 1) < unique_first_bytes
+                              ? d_first_byte_offsets[offset_idx + 1]
+                              : static_cast<size_type>(d_targets.size());
+    return true;
+  }
+
   /**
    * @brief Returns the index of the target string found at the given byte position
    * in the input strings column
@@ -91,7 +206,12 @@ struct replace_multi_parallel_fn {
     auto const d_chars   = get_base_ptr() + d_offsets[0] + idx;
     size_type str_idx    = -1;
     string_view d_str{};
-    for (std::size_t t = 0; t < d_targets.size(); ++t) {
+    size_type first_idx = 0;
+    size_type last_idx  = 0;
+    if (!get_target_key_range(d_chars, first_idx, last_idx)) { return -1; }
+
+    for (auto key_idx = first_idx; key_idx < last_idx; ++key_idx) {
+      auto const t     = target_key_index(d_target_keys[key_idx]);
       auto const d_tgt = d_targets[t];
       if (!d_tgt.empty() && (idx + d_tgt.size_bytes() <= chars_bytes) &&
           (d_tgt.compare(d_chars, d_tgt.size_bytes()) == 0)) {
@@ -110,7 +230,12 @@ struct replace_multi_parallel_fn {
   __device__ bool has_target(int64_t idx, int64_t chars_bytes) const
   {
     auto const d_chars = get_base_ptr() + d_strings_offsets[0] + idx;
-    for (auto& d_tgt : d_targets) {
+    size_type first_idx = 0;
+    size_type last_idx  = 0;
+    if (!get_target_key_range(d_chars, first_idx, last_idx)) { return false; }
+
+    for (auto key_idx = first_idx; key_idx < last_idx; ++key_idx) {
+      auto const d_tgt = d_targets[target_key_index(d_target_keys[key_idx])];
       if (!d_tgt.empty() && (idx + d_tgt.size_bytes() <= chars_bytes) &&
           (d_tgt.compare(d_chars, d_tgt.size_bytes()) == 0)) {
         return true;
@@ -237,11 +362,19 @@ struct replace_multi_parallel_fn {
   replace_multi_parallel_fn(column_device_view const& d_strings,
                             cudf::detail::input_offsetalator d_strings_offsets,
                             device_span<string_view const> d_targets,
-                            device_span<string_view const> d_replacements)
+                            device_span<string_view const> d_replacements,
+                            u_char const* d_first_bytes,
+                            uint64_t const* d_target_keys,
+                            size_type const* d_first_byte_offsets,
+                            size_type unique_first_bytes)
     : d_strings(d_strings),
       d_strings_offsets(d_strings_offsets),
       d_targets{d_targets},
-      d_replacements{d_replacements}
+      d_replacements{d_replacements},
+      d_first_bytes{d_first_bytes},
+      d_target_keys{d_target_keys},
+      d_first_byte_offsets{d_first_byte_offsets},
+      unique_first_bytes{unique_first_bytes}
   {
   }
 
@@ -250,6 +383,10 @@ struct replace_multi_parallel_fn {
   cudf::detail::input_offsetalator d_strings_offsets;
   device_span<string_view const> d_targets;
   device_span<string_view const> d_replacements;
+  u_char const* d_first_bytes{};
+  uint64_t const* d_target_keys{};
+  size_type const* d_first_byte_offsets{};
+  size_type unique_first_bytes{};
 };
 
 constexpr int64_t block_size         = 512;  // number of threads per block
@@ -320,12 +457,17 @@ std::unique_ptr<column> replace_character_parallel(strings_column_view const& in
     create_string_vector_from_column(targets, stream, cudf::get_current_device_resource_ref());
   auto d_replacements =
     create_string_vector_from_column(repls, stream, cudf::get_current_device_resource_ref());
+  auto target_lookup = build_target_first_byte_lookup(d_targets, stream);
 
   replace_multi_parallel_fn fn{
     *d_strings,
     cudf::detail::offsetalator_factory::make_input_iterator(input.offsets(), input.offset()),
     d_targets,
     d_replacements,
+    target_lookup.first_bytes.data(),
+    target_lookup.sorted_target_keys.data(),
+    target_lookup.first_byte_offsets.data(),
+    target_lookup.unique_first_bytes,
   };
 
   // Count the number of targets in the entire column.
@@ -423,11 +565,37 @@ std::unique_ptr<column> replace_character_parallel(strings_column_view const& in
  */
 struct replace_multi_fn {
   column_device_view const d_strings;
-  column_device_view const d_targets;
-  column_device_view const d_repls;
+  device_span<string_view const> d_targets;
+  device_span<string_view const> d_repls;
   size_type* d_sizes{};
   char* d_chars{};
   cudf::detail::input_offsetalator d_offsets;
+  u_char const* d_first_bytes{};
+  uint64_t const* d_target_keys{};
+  size_type const* d_first_byte_offsets{};
+  size_type unique_first_bytes{};
+
+  __device__ string_view get_replacement_string(size_type idx) const
+  {
+    return d_repls.size() == 1 ? d_repls[0] : d_repls[idx];
+  }
+
+  __device__ bool get_target_key_range(char const* d_chars,
+                                       size_type& first_idx,
+                                       size_type& last_idx) const
+  {
+    auto const chr      = static_cast<u_char>(*d_chars);
+    auto const last_ptr = d_first_bytes + unique_first_bytes;
+    auto const byte_ptr = thrust::lower_bound(thrust::seq, d_first_bytes, last_ptr, chr);
+    if ((byte_ptr == last_ptr) || (*byte_ptr != chr)) { return false; }
+
+    auto const offset_idx = static_cast<size_type>(cuda::std::distance(d_first_bytes, byte_ptr));
+    first_idx             = d_first_byte_offsets[offset_idx];
+    last_idx              = (offset_idx + 1) < unique_first_bytes
+                              ? d_first_byte_offsets[offset_idx + 1]
+                              : static_cast<size_type>(d_targets.size());
+    return true;
+  }
 
   __device__ void operator()(size_type idx)
   {
@@ -445,21 +613,25 @@ struct replace_multi_fn {
 
     // check each character against each target
     while (spos < d_str.size_bytes()) {
-      for (int tgt_idx = 0; tgt_idx < d_targets.size(); ++tgt_idx) {
-        auto const d_tgt = d_targets.element<string_view>(tgt_idx);
-        if (!d_tgt.empty() && (d_tgt.size_bytes() <= (d_str.size_bytes() - spos)) &&  // check fit
-            (d_tgt.compare(in_ptr + spos, d_tgt.size_bytes()) == 0))                  // and match
-        {
-          auto const d_repl = (d_repls.size() == 1) ? d_repls.element<string_view>(0)
-                                                    : d_repls.element<string_view>(tgt_idx);
-          bytes += d_repl.size_bytes() - d_tgt.size_bytes();
-          if (out_ptr) {
-            out_ptr = copy_and_increment(out_ptr, in_ptr + lpos, spos - lpos);
-            out_ptr = copy_string(out_ptr, d_repl);
-            lpos    = spos + d_tgt.size_bytes();
+      size_type first_idx = 0;
+      size_type last_idx  = 0;
+      if (get_target_key_range(in_ptr + spos, first_idx, last_idx)) {
+        for (auto key_idx = first_idx; key_idx < last_idx; ++key_idx) {
+          auto const tgt_idx = target_key_index(d_target_keys[key_idx]);
+          auto const d_tgt   = d_targets[tgt_idx];
+          if (!d_tgt.empty() && (d_tgt.size_bytes() <= (d_str.size_bytes() - spos)) &&  // check fit
+              (d_tgt.compare(in_ptr + spos, d_tgt.size_bytes()) == 0))                  // and match
+          {
+            auto const d_repl = get_replacement_string(tgt_idx);
+            bytes += d_repl.size_bytes() - d_tgt.size_bytes();
+            if (out_ptr) {
+              out_ptr = copy_and_increment(out_ptr, in_ptr + lpos, spos - lpos);
+              out_ptr = copy_string(out_ptr, d_repl);
+              lpos    = spos + d_tgt.size_bytes();
+            }
+            spos += d_tgt.size_bytes() - 1;
+            break;
           }
-          spos += d_tgt.size_bytes() - 1;
-          break;
         }
       }
       ++spos;
@@ -479,11 +651,26 @@ std::unique_ptr<column> replace_string_parallel(strings_column_view const& input
                                                 rmm::device_async_resource_ref mr)
 {
   auto d_strings      = column_device_view::create(input.parent(), stream);
-  auto d_targets      = column_device_view::create(targets.parent(), stream);
-  auto d_replacements = column_device_view::create(repls.parent(), stream);
+  auto d_targets =
+    create_string_vector_from_column(targets, stream, cudf::get_current_device_resource_ref());
+  auto d_replacements =
+    create_string_vector_from_column(repls, stream, cudf::get_current_device_resource_ref());
+  auto target_lookup = build_target_first_byte_lookup(d_targets, stream);
 
   auto [offsets_column, chars] = make_strings_children(
-    replace_multi_fn{*d_strings, *d_targets, *d_replacements}, input.size(), stream, mr);
+    replace_multi_fn{*d_strings,
+                     d_targets,
+                     d_replacements,
+                     {},
+                     {},
+                     {},
+                     target_lookup.first_bytes.data(),
+                     target_lookup.sorted_target_keys.data(),
+                     target_lookup.first_byte_offsets.data(),
+                     target_lookup.unique_first_bytes},
+    input.size(),
+    stream,
+    mr);
 
   return make_strings_column(input.size(),
                              std::move(offsets_column),
