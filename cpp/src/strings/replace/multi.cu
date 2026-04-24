@@ -74,17 +74,17 @@ using target_pair = cuda::std::tuple<int64_t, size_type>;
  * within each first-byte bucket, which is required because replace_multiple
  * uses the first matching target in target-list order at each position.
  */
-constexpr uint64_t make_target_sort_key(u_char first_byte, size_type index)
+__host__ __device__ constexpr uint64_t make_target_sort_key(u_char first_byte, size_type index)
 {
   return (static_cast<uint64_t>(first_byte) << 32) | static_cast<uint32_t>(index);
 }
 
-constexpr u_char target_key_first_byte(uint64_t key)
+__host__ __device__ constexpr u_char target_key_first_byte(uint64_t key)
 {
   return static_cast<u_char>(key >> 32);
 }
 
-constexpr size_type target_key_index(uint64_t key)
+__host__ __device__ constexpr size_type target_key_index(uint64_t key)
 {
   return static_cast<size_type>(static_cast<uint32_t>(key));
 }
